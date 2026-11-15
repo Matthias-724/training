@@ -11,6 +11,7 @@ import { h, icon, choose, confirmDialog, toast, openSheet, numberInput } from '.
 import {
   prefillSets, formatTarget, progressionHint, lastKneeWarning,
   parseNum, formatNum, cardioSummary, ZONE2_HINT, dateKey, KNEE_FLAGS, AMPEL,
+  pauseReason, reducedWeight,
 } from '../logic.js';
 import { CATEGORIES } from '../seed.js';
 import { fmtDateShort, fmtDuration, fmtSets } from '../format.js';
@@ -131,8 +132,11 @@ async function askKnee(d, step) {
   if (result.color === 'rot') {
     // Sofort pausieren, nicht erst beim Speichern: Die Pause soll auch dann
     // gelten, wenn das Training später verworfen wird.
-    await store.pauseExercise(step.exerciseId, d.date);
-    toast('Übung pausiert. Freigeben im Plan unter der Übung.', { duration: 5000 });
+    const reason = pauseReason(result);
+    await store.pauseExercise(step.exerciseId, d.date, reason);
+    toast(reason === 'warnzeichen'
+      ? 'Übung pausiert. Bei Blockade oder Wegknicken ärztlich abklären.'
+      : 'Übung pausiert. Beim nächsten Mal mit weniger Last oder tauschen.', { duration: 5000 });
   }
   await saveNow(d);
   return true;
@@ -320,19 +324,23 @@ function exerciseView(ctx, d, step, goto) {
 
   if (step.paused && step.skipped) {
     const ex = store.exercise(step.exerciseId);
+    const since = ex?.pausedSince ? fmtDateShort(ex.pausedSince) : 'dem letzten Rot';
+    const warn = ex?.pausedReason === 'warnzeichen';
     box.append(infoBox('bad',
       h('strong', null, 'Pausiert'),
-      h('p', null, `Seit ${ex?.pausedSince ? fmtDateShort(ex.pausedSince) : 'dem letzten Rot'} wegen Knie-Ampel Rot. ${AMPEL.rot.rule}.`)),
+      h('p', null, warn
+        ? `Seit ${since} wegen Warnzeichen (Wegknicken, Blockieren, stechender Schmerz oder deutliche Schwellung). Erst ärztlich abklären.`
+        : `Seit ${since} wegen Schmerz ab 5. Mit weniger Last weitermachen oder eine Ersatzübung wählen.`)),
     h('div', { class: 'stack' },
       h('button', { class: 'btn secondary block', onclick: async () => {
-        const ok = await confirmDialog('Nur freigeben, wenn das ärztlich abgeklärt ist.', { title: 'Übung freigeben', ok: 'Freigeben' });
-        if (!ok) return;
+        if (warn && !await confirmDialog('Nur freigeben, wenn das ärztlich abgeklärt ist.', { title: 'Übung freigeben', ok: 'Freigeben' })) return;
         await store.releaseExercise(step.exerciseId);
+        for (const s of step.sets) s.weight = reducedWeight(s.weight);
         step.paused = false;
         step.skipped = false;
         await saveNow(d);
         ctx.refresh();
-      } }, 'Freigeben und heute machen'),
+      } }, 'Mit 10 % weniger Gewicht freigeben'),
       h('button', { class: 'btn secondary block', onclick: () => tauschen(ctx, d, step) }, icon('swap'), 'Ersatzübung machen')));
     return box;
   }

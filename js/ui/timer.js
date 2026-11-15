@@ -182,7 +182,7 @@ export function runHold({ name, seconds, perSide, onDone }) {
     }
     overlay.classList.toggle('prep', step.kind === 'prep');
     stepLabel.textContent = step.label;
-    number.textContent = String(whole);
+    number.textContent = whole >= 60 ? fmtClock(whole) : String(whole);
     ring.style.setProperty('--p', String(1 - left / step.dur));
   }
 

@@ -37,6 +37,18 @@ export function renderOverview(ctx) {
     ctx.main.append(h('div', { class: 'box warn' }, 'Klausurmodus ist an: In der Heute-Ansicht gelten nur Montag, Dienstag und Freitag.'));
   }
 
+  // Tägliche Einheit: unabhängig vom Wochentag, auch im Klausurmodus
+  ctx.main.append(h('section', { class: 'card' },
+    field('Jeden Tag', select({
+      label: 'Tägliche Einheit',
+      value: phase.dailyUnitId ?? '',
+      options: [{ value: '', label: 'Keine' }, ...store.allUnits().map((u) => ({ value: u.id, label: u.name }))],
+      onChange: async (v) => {
+        phase.dailyUnitId = v || null;
+        if (await store.savePhase(phase)) toast('Gespeichert');
+      },
+    }), 'Erscheint auf "Heute" an jedem Tag, auch an Ruhetagen und im Klausurmodus.')));
+
   // Wochenplan
   const week = h('div', { class: 'list' }, WEEKDAYS.map((wd) => {
     const day = resolveDay(phase, wd, false);
@@ -57,7 +69,7 @@ export function renderOverview(ctx) {
     week);
 
   // Einheiten
-  const planned = new Set(Object.values(phase.weekplan).map((d) => d.unitId).filter(Boolean));
+  const planned = new Set([...Object.values(phase.weekplan).map((d) => d.unitId), phase.dailyUnitId].filter(Boolean));
   const units = store.allUnits();
   const unitRow = (u) => h('a', { class: 'list-row', href: `#/plan/einheit/${u.id}` },
     h('span', { class: 'list-main' },
@@ -185,7 +197,7 @@ export function renderUnit(ctx) {
     } })),
     field('Hinweis beim Start', h('textarea', { rows: 2, value: u.hint ?? '', onchange: (e) => { u.hint = e.target.value; store.saveUnit(u); } })),
     h('p', { class: 'muted small' }, usage.length
-      ? `Geplant: ${usage.map((x) => `${x.phase.name} ${WEEKDAY_NAMES[x.weekday].slice(0, 2)}`).join(', ')}`
+      ? `Geplant: ${usage.map((x) => `${x.phase.name} ${x.weekday === 'taeglich' ? 'täglich' : WEEKDAY_NAMES[x.weekday].slice(0, 2)}`).join(', ')}`
       : 'In keinem Wochenplan eingeplant.')));
 
   const list = h('div', { class: 'list' });
@@ -283,11 +295,15 @@ export function renderExercise(ctx) {
     fill(form,
       ex.paused ? h('div', { class: 'box bad' },
         h('strong', null, 'Pausiert'),
-        h('p', null, `Seit ${ex.pausedSince ? fmtDateShort(ex.pausedSince) : 'unbekannt'} wegen Knie-Ampel Rot. Erst nach ärztlicher Abklärung freigeben.`),
+        h('p', null, ex.pausedReason === 'warnzeichen'
+          ? `Seit ${ex.pausedSince ? fmtDateShort(ex.pausedSince) : 'unbekannt'} wegen Warnzeichen. Erst nach ärztlicher Abklärung freigeben.`
+          : `Seit ${ex.pausedSince ? fmtDateShort(ex.pausedSince) : 'unbekannt'} wegen Schmerz ab 5. Mit weniger Last freigeben oder eine Ersatzübung nutzen.`),
         h('button', { class: 'btn secondary', onclick: async () => {
-          if (!await confirmDialog('Ist das ärztlich abgeklärt?', { title: 'Übung freigeben', ok: 'Freigeben' })) return;
+          if (ex.pausedReason === 'warnzeichen'
+            && !await confirmDialog('Ist das ärztlich abgeklärt?', { title: 'Übung freigeben', ok: 'Freigeben' })) return;
           ex.paused = false;
           ex.pausedSince = null;
+          ex.pausedReason = null;
           if (!isNew) await store.releaseExercise(ex.id);
           draw();
         } }, 'Freigeben')) : null,

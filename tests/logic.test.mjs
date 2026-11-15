@@ -5,14 +5,15 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  ampelColor, worseColor, morningVerdict, effectiveColor, pendingMorningCheck,
+  ampelColor, worseColor, morningVerdict, morningColor, effectiveColor, pendingMorningCheck,
+  pauseReason, reducedWeight, opReadiness,
   entryAchieved, progressionHint, lastKneeWarning, prefillSets, formatTarget,
   resolveDay, dayTitle, phaseIsEmpty, cardioSummary, backupStatus,
   dateKey, addDays, daysBetween, weekdayOf, weekStart, parseNum, formatNum,
   entryValue, trainingKnee, WEEKDAYS,
 } from '../js/logic.js';
 import { fmtSets, fmtClock, fmtDuration } from '../js/format.js';
-import { buildSeed } from '../js/seed.js';
+import { buildSeed, mergeSeedUpdate } from '../js/seed.js';
 import { validateBackup, BACKUP_FORMAT } from '../js/store.js';
 
 // ---------------------------------------------------------------- Hilfen
@@ -29,14 +30,22 @@ function entry({ sets = 3, min = 10, max = 12, done = [12, 12, 12], color = 'gru
 
 // ---------------------------------------------------------------- Ampel
 
-test('Ampelfarbe aus Schmerzwert', () => {
+test('Ampelfarbe aus Schmerzwert (konservativ fürs instabile Knie)', () => {
   assert.equal(ampelColor(0), 'gruen');
-  assert.equal(ampelColor(3), 'gruen');
+  assert.equal(ampelColor(2), 'gruen');
+  assert.equal(ampelColor(3), 'gelb');
   assert.equal(ampelColor(4), 'gelb');
-  assert.equal(ampelColor(5), 'gelb');
-  assert.equal(ampelColor(6), 'rot');
+  assert.equal(ampelColor(5), 'rot');
   assert.equal(ampelColor(10), 'rot');
   assert.equal(ampelColor(null), null);
+});
+
+test('Pausierungsgrund und reduzierte Last', () => {
+  assert.equal(pauseReason({ pain: 6, flags: {} }), 'schmerz');
+  assert.equal(pauseReason({ pain: 1, flags: { wegknicken: true } }), 'warnzeichen');
+  assert.equal(reducedWeight(60), 54);
+  assert.equal(reducedWeight(42.5), 38.5);
+  assert.equal(reducedWeight(null), null);
 });
 
 test('Warnzeichen ergeben immer Rot', () => {
@@ -56,18 +65,20 @@ test('Kniecheck am Morgen', () => {
   assert.equal(morningVerdict(null), null);
   assert.equal(morningVerdict({ schlimmer: false, schwellung: false, stroke: '' }), 'ok');
   assert.equal(morningVerdict({ schlimmer: false, schwellung: false, stroke: 'Spur' }), 'ok');
-  assert.equal(morningVerdict({ schlimmer: false, schwellung: false, stroke: '1+' }), 'halten');
-  assert.equal(morningVerdict({ schlimmer: false, schwellung: false, stroke: '2+' }), 'gelb');
-  assert.equal(morningVerdict({ schlimmer: true, schwellung: false, stroke: '' }), 'gelb');
-  assert.equal(morningVerdict({ schlimmer: false, schwellung: true, stroke: '0' }), 'gelb');
-  assert.equal(morningVerdict({ schlimmer: false, schwellung: false, stroke: '3+' }), 'rot');
+  assert.equal(morningVerdict({ schlimmer: false, schwellung: false, stroke: '1+' }), 'gelb');
+  assert.equal(morningVerdict({ schlimmer: false, schwellung: false, stroke: '2+' }), 'rot');
+  assert.equal(morningVerdict({ schlimmer: true, schwellung: false, stroke: '' }), 'rot');
+  assert.equal(morningVerdict({ schlimmer: false, schwellung: true, stroke: '0' }), 'rot');
+  assert.equal(morningColor({ schlimmer: false, schwellung: false, stroke: '' }), 'gruen');
+  assert.equal(morningColor({ schlimmer: true, schwellung: false, stroke: '' }), 'rot');
 });
 
-test('Grün wird Gelb, wenn das Knie am Morgen schlimmer ist', () => {
+test('Folgetag stuft die Übungen vom Vortag ab', () => {
   const e = entry();
   assert.equal(effectiveColor(e, null), 'gruen');
-  assert.equal(effectiveColor(e, { schlimmer: true, schwellung: false }), 'gelb');
-  assert.equal(effectiveColor(entry({ color: 'rot' }), { schlimmer: true }), 'rot');
+  assert.equal(effectiveColor(e, { schlimmer: true, schwellung: false }), 'rot');
+  assert.equal(effectiveColor(e, { schlimmer: false, schwellung: false, stroke: '1+' }), 'gelb');
+  assert.equal(effectiveColor(entry({ color: 'gelb' }), { stroke: '1+' }), 'gelb');
   assert.equal(effectiveColor(entry({ color: null }), { schlimmer: true }), null);
 });
 
@@ -96,7 +107,7 @@ test('Steigerungshinweis nach zweimal geschafft und grün', () => {
   assert.equal(progressionHint([h(entry({ color: 'gelb' })), h(entry())]), null, 'gelb sperrt');
   assert.equal(progressionHint([h(entry()), h(entry(), { schlimmer: true })]), null, 'Morgen schlimmer sperrt');
   assert.equal(progressionHint([h(entry(), { stroke: '1+' }), h(entry())]), null, '1+ heißt halten');
-  assert.match(progressionHint([h(entry()), h(entry())]).text, /Gewicht leicht erhöhen/, 'oben angekommen');
+  assert.match(progressionHint([h(entry()), h(entry())]).text, /Gewicht um 5 bis 10 Prozent/, 'oben angekommen');
   assert.match(progressionHint([h(entry({ assisted: true })), h(entry({ assisted: true }))]).text, /Unterstützung/);
   assert.match(progressionHint([h(entry({ mode: 'hold', min: 30, max: 45, done: [30, 30, 30] })), h(entry({ mode: 'hold', min: 30, max: 45, done: [30, 30, 30] }))]).text, /Haltezeit/);
 });
@@ -111,8 +122,9 @@ test('übersprungene Einträge zählen nicht', () => {
   assert.ok(progressionHint([{ entry: skipped }, { entry: entry() }, { entry: entry() }]));
 });
 
-test('Warnung nach Gelb beim letzten Mal', () => {
-  assert.match(lastKneeWarning([{ entry: entry({ color: 'gelb' }) }]).text, /zurücknehmen/);
+test('Warnung nach Gelb oder Rot beim letzten Mal', () => {
+  assert.match(lastKneeWarning([{ entry: entry({ color: 'gelb' }) }]).text, /Last halten/);
+  assert.match(lastKneeWarning([{ entry: entry() , check: { schlimmer: true } }]).text, /Letztes Mal Rot/);
   assert.equal(lastKneeWarning([{ entry: entry() }]), null);
 });
 
@@ -170,6 +182,8 @@ test('Ausdauer-Zusammenfassung und Zielformat', () => {
   assert.equal(formatTarget({ sets: 3, min: 10, max: 12, mode: 'reps' }), '3 × 10–12');
   assert.equal(formatTarget({ sets: 4, min: 30, max: 45, mode: 'hold' }), '4 × 30–45 s');
   assert.equal(formatTarget({ sets: 3, min: 10, max: 10, mode: 'reps', perSide: true }), '3 × 10 je Seite');
+  assert.equal(formatTarget({ sets: 2, min: 300, max: 600, mode: 'hold' }), '2 × 5–10 min');
+  assert.equal(formatTarget({ sets: 3, min: 60, max: 60, mode: 'hold' }), '3 × 60 s');
 });
 
 // ---------------------------------------------------------------- Startdaten
@@ -197,16 +211,77 @@ test('Startdaten sind in sich stimmig', () => {
     for (const d of Object.values(p.weekplan)) {
       if (d.unitId) assert.ok(unitIds.has(d.unitId), `Einheit ${d.unitId} in ${p.id} fehlt`);
     }
+    if (p.dailyUnitId) assert.ok(unitIds.has(p.dailyUnitId), `tägliche Einheit in ${p.id} fehlt`);
   }
 });
 
-test('Phase 1 hat zwei Beintage und Klimmzüge am Ziehen-Tag', () => {
+test('Phase 1: zwei Beintage, tägliche Aktivierung, Klimmzüge am Ziehen-Tag', () => {
   const { units, phases } = buildSeed();
+  const unit = (id) => units.find((u) => u.id === id).exerciseIds;
   const p1 = phases.find((p) => p.id === 'p1');
   assert.equal(p1.weekplan.di.unitId, 'u-beine-a');
   assert.equal(p1.weekplan.fr.unitId, 'u-beine-b');
-  assert.ok(units.find((u) => u.id === 'u-ziehen').exerciseIds.includes('klimmzuege'));
-  assert.ok(units.find((u) => u.id === 'u-beine-a').exerciseIds.includes('gerades-beinheben'));
+  assert.equal(p1.dailyUnitId, 'u-taeglich');
+  assert.deepEqual(unit('u-taeglich'), ['streckung-sitzend', 'quad-sets', 'gerades-beinheben']);
+  assert.ok(unit('u-ziehen').includes('klimmzuege'));
+});
+
+test('Beintage: Störung zuerst, gesundes Bein eigene Sätze, keine Stabilität mehr am Donnerstag', () => {
+  const { units } = buildSeed();
+  const unit = (id) => units.find((u) => u.id === id).exerciseIds;
+  for (const id of ['u-beine-a', 'u-beine-b']) assert.equal(unit(id)[0], 'einbeinstand-stoerung', id);
+  assert.ok(unit('u-beine-a').includes('gb-beinpresse'));
+  assert.ok(unit('u-beine-b').includes('gb-kniestrecker'));
+  assert.ok(unit('u-beine-b').includes('clamshell'));
+  assert.ok(!unit('u-core').includes('einbeinstand'));
+  assert.ok(!unit('u-core').includes('streckung-sitzend'));
+});
+
+test('Tägliche Übungen lösen keinen Kniecheck aus', () => {
+  const { exercises, units } = buildSeed();
+  const daily = units.find((u) => u.id === 'u-taeglich').exerciseIds;
+  for (const id of daily) assert.equal(exercises.find((e) => e.id === id).kneeCheck, false, id);
+});
+
+test('Plan-Update behält Eigenes, Pausen und Freischaltungen', () => {
+  const old = buildSeed();
+  old.exercises.find((e) => e.id === 'kniestrecker').paused = true;
+  old.exercises.find((e) => e.id === 'kniestrecker').pausedSince = '2026-11-10';
+  old.exercises.push({ id: 'ex-eigen', name: 'Eigene Übung', alternatives: [] });
+  old.units.push({ id: 'u-eigen', name: 'Eigene Einheit', exerciseIds: ['ex-eigen'] });
+  old.phases.find((p) => p.id === 'p2b').locked = false;
+  old.units.find((u) => u.id === 'u-beine-a').exerciseIds = ['beinpresse'];
+
+  const merged = mergeSeedUpdate(old);
+  const knie = merged.exercises.find((e) => e.id === 'kniestrecker');
+  assert.equal(knie.paused, true);
+  assert.equal(knie.pausedSince, '2026-11-10');
+  assert.ok(merged.exercises.some((e) => e.id === 'ex-eigen'));
+  assert.ok(merged.units.some((u) => u.id === 'u-eigen'));
+  assert.equal(merged.phases.find((p) => p.id === 'p2b').locked, false);
+  assert.equal(merged.phases.find((p) => p.id === 'p2c').locked, true);
+  assert.equal(merged.units.find((u) => u.id === 'u-beine-a').exerciseIds[0], 'einbeinstand-stoerung', 'Startinhalt wird erneuert');
+  assert.equal(new Set(merged.exercises.map((e) => e.id)).size, merged.exercises.length, 'keine doppelten IDs');
+});
+
+test('Kriterien vor der OP', () => {
+  const none = opReadiness([]);
+  assert.equal(none.length, 7);
+  assert.ok(none.every((x) => x.ok === null));
+
+  const r = opReadiness([
+    { date: '2026-12-10', lsi: 82, stroke: 'Spur', slrOk: true },
+    { date: '2026-12-01', streckdefizit: 3, beugung: 125, lsi: 70, gangOk: false },
+  ]);
+  const by = Object.fromEntries(r.map((x) => [x.key, x]));
+  assert.equal(by.lsi.ok, true, 'neueste Messung zählt');
+  assert.equal(by.lsi.value, '82 %');
+  assert.equal(by.streckung.ok, false);
+  assert.equal(by.beugung.ok, true);
+  assert.equal(by.erguss.ok, true);
+  assert.equal(by.slr.ok, true);
+  assert.equal(by.gang.ok, false);
+  assert.equal(by.stand.ok, null);
 });
 
 test('Phase 2a enthält keine Klimmzüge und kein Rudern einarmig', () => {

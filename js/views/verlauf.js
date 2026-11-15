@@ -3,7 +3,8 @@
 import { h, icon, confirmDialog, openSheet, field, numberInput, toast } from '../ui/dom.js';
 import {
   CARDIO_TYPES, KNEE_FLAGS, STROKE_GRADES, MORNING_TEXT, AMPEL,
-  trainingKnee, entryValue, entryValueUnit, morningVerdict, effectiveColor, dateKey, parseNum, formatNum,
+  trainingKnee, entryValue, entryValueUnit, morningVerdict, morningColor, effectiveColor, opReadiness,
+  dateKey, parseNum, formatNum,
 } from '../logic.js';
 import { CATEGORIES } from '../seed.js';
 import { fmtDateShort, fmtDate, fmtMonth, fmtDuration, fmtSets } from '../format.js';
@@ -89,10 +90,9 @@ export function renderTraining(ctx) {
     h('div', { class: 'muted' }, [phase?.name, t.finishedAt ? fmtDuration(t.finishedAt - t.startedAt) : null].filter(Boolean).join(' · '))));
 
   if (check) {
-    const v = morningVerdict(check);
-    const color = v === 'ok' ? 'gruen' : v === 'halten' ? 'gelb' : v;
+    const color = morningColor(check);
     ctx.main.append(h('div', { class: `box ${color === 'gruen' ? 'good' : color === 'rot' ? 'bad' : 'warn'}` },
-      h('strong', null, 'Kniecheck am Folgetag: '), MORNING_TEXT[v]));
+      h('strong', null, 'Kniecheck am Folgetag: '), MORNING_TEXT[morningVerdict(check)]));
   }
 
   const cardio = store.cardioLogs().filter((c) => c.trainingId === t.id);
@@ -217,10 +217,11 @@ function kneeChartOpts(label) {
     yMin: 0,
     yMax: 10,
     step: 2,
+    // Bandgrenzen zwischen den ganzen Zahlen, passend zu ampelColor: 0–2, 3–4, ab 5.
     bands: [
-      { from: 0, to: 3.5, status: 'gruen', label: 'Grün' },
-      { from: 3.5, to: 5.5, status: 'gelb', label: 'Gelb' },
-      { from: 5.5, to: 10, status: 'rot', label: 'Rot' },
+      { from: 0, to: 2.5, status: 'gruen', label: 'Grün' },
+      { from: 2.5, to: 4.5, status: 'gelb', label: 'Gelb' },
+      { from: 4.5, to: 10, status: 'rot', label: 'Rot' },
     ],
   };
 }
@@ -242,17 +243,30 @@ function kneeTab(ctx) {
   const checks = store.kneeChecks();
   if (checks.length) {
     ctx.main.append(h('h2', { class: 'list-head' }, 'Kniecheck am Folgetag'), h('div', { class: 'list' }, checks.map((c) => {
-      const v = morningVerdict(c);
-      const color = v === 'ok' ? 'gruen' : v === 'halten' ? 'gelb' : v;
-      const parts = [c.schlimmer ? 'schlimmer' : 'nicht schlimmer', c.schwellung ? 'Schwellung' : 'keine Schwellung', c.stroke ? `Stroke-Test ${c.stroke}` : null];
+      const parts = [c.schlimmer ? 'schlimmer' : 'nicht schlimmer', c.schwellung ? 'mehr Schwellung' : 'keine zusätzliche Schwellung', c.stroke ? `Stroke-Test ${c.stroke}` : null];
       return h('div', { class: 'list-row' },
         h('span', { class: 'list-date' }, fmtDateShort(c.date)),
         h('span', { class: 'list-main' }, h('span', { class: 'list-meta' }, parts.filter(Boolean).join(', '))),
-        statusBadge(color, v === 'halten' ? 'Halten' : AMPEL[color].label));
+        statusBadge(morningColor(c)));
     })));
   }
 
+  readinessCard(ctx);
   measurementsSection(ctx);
+}
+
+// ---------------------------------------------------------------- Bereit zur OP
+
+function readinessCard(ctx) {
+  const items = opReadiness(store.measurements());
+  const done = items.filter((x) => x.ok === true).length;
+  ctx.main.append(h('section', { class: 'card' },
+    h('h2', null, `Bereit zur OP: ${done} von ${items.length}`),
+    h('p', { class: 'muted small' }, 'Kriterien aus Delaware-Oslo und Leitlinie. Die Werte kommen aus den Messungen unten, je Kriterium die neueste.'),
+    h('div', { class: 'readiness' }, items.map((x) => h('div', { class: 'readiness-row' },
+      x.ok === true ? statusBadge('gruen', 'erfüllt') : x.ok === false ? statusBadge('gelb', 'offen') : h('span', { class: 'status muted' }, 'nicht gemessen'),
+      h('span', { class: 'readiness-label' }, x.label),
+      h('span', { class: 'readiness-value muted' }, x.value ?? ''))))));
 }
 
 // ---------------------------------------------------------------- Messwerte vom Physio
@@ -287,12 +301,27 @@ function measurementText(m) {
     m.beugung != null ? `Beugung ${formatNum(m.beugung)}°` : null,
     m.lsi != null ? `Kraft ${formatNum(m.lsi)} %` : null,
     m.stroke ? `Stroke-Test ${m.stroke}` : null,
+    m.slrOk != null ? `Beinheben ${m.slrOk ? 'ohne' : 'mit'} Streckdefizit` : null,
+    m.gangOk != null ? `Gangbild ${m.gangOk ? 'normal' : 'auffällig'}` : null,
+    m.standOk != null ? `Einbeinstand ${m.standOk ? 'über' : 'unter'} 30 s` : null,
     m.note || null,
   ].filter(Boolean).join(' · ') || 'ohne Werte';
 }
 
+/** Ja/Nein/nicht geprüft als Auswahl. Schreibt true, false oder null in m[key]. */
+function yesNoSelect(m, key, label) {
+  const sel = h('select', { 'aria-label': label },
+    h('option', { value: '', selected: m[key] == null }, 'nicht geprüft'),
+    h('option', { value: 'ja', selected: m[key] === true }, 'ja'),
+    h('option', { value: 'nein', selected: m[key] === false }, 'nein'));
+  sel.addEventListener('change', () => { m[key] = sel.value === '' ? null : sel.value === 'ja'; });
+  return sel;
+}
+
 function editMeasurement(ctx, existing = null) {
-  const m = existing ? { ...existing } : { id: store.uid('m'), date: dateKey(), streckdefizit: null, beugung: null, lsi: null, stroke: '', note: '' };
+  const m = existing
+    ? { slrOk: null, gangOk: null, standOk: null, ...existing }
+    : { id: store.uid('m'), date: dateKey(), streckdefizit: null, beugung: null, lsi: null, stroke: '', slrOk: null, gangOk: null, standOk: null, note: '' };
   const strokeSel = h('select', { 'aria-label': 'Stroke-Test' },
     h('option', { value: '' }, 'nicht gemessen'),
     STROKE_GRADES.map((g) => h('option', { value: g, selected: m.stroke === g }, g)));
@@ -325,6 +354,10 @@ function editMeasurement(ctx, existing = null) {
       h('div', { class: 'form-row' },
         field('Kraft (%)', numberInput({ label: 'Quadrizepskraft im Seitenvergleich in Prozent', value: formatNum(m.lsi), onInput: (v) => { m.lsi = parseNum(v); } }), 'operiert geteilt durch gesund'),
         field('Stroke-Test', strokeSel)),
+      field('Gerades Beinheben ohne Streckdefizit', yesNoSelect(m, 'slrOk', 'Gerades Beinheben ohne Streckdefizit')),
+      h('div', { class: 'form-row' },
+        field('Gangbild normal', yesNoSelect(m, 'gangOk', 'Gangbild normal')),
+        field('Einbeinstand über 30 s', yesNoSelect(m, 'standOk', 'Einbeinstand über 30 Sekunden'))),
       field('Notiz', h('textarea', { rows: 2, value: m.note ?? '', oninput: (e) => { m.note = e.target.value; } }))),
     actions,
   });

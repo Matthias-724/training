@@ -3,7 +3,7 @@
 import { h, openSheet } from './dom.js';
 import {
   AMPEL, KNEE_FLAGS, STROKE_GRADES, MORNING_TEXT, ZONE2_HINT,
-  ampelColor, morningVerdict, dateKey,
+  ampelColor, morningVerdict, morningColor, dateKey,
 } from '../logic.js';
 import { fmtDateShort } from '../format.js';
 import * as store from '../store.js';
@@ -45,7 +45,10 @@ export function rateKnee(exerciseName, initial = null) {
         result.className = `ampel-result r-${color}`;
         result.append(statusBadge(color), h('p', null, AMPEL[color].rule));
         if (color === 'rot') {
-          result.append(h('p', { class: 'muted' }, 'Die Übung wird pausiert, bis du sie im Plan wieder freigibst.'));
+          const warn = Object.values(flags).some(Boolean);
+          result.append(h('p', { class: 'muted' }, warn
+            ? 'Die Übung wird pausiert. Bei Blockade oder Wegknicken vor dem nächsten Mal ärztlich abklären.'
+            : 'Die Übung wird pausiert. Beim nächsten Mal mit weniger Last freigeben oder eine Ersatzübung machen.'));
         }
       } else {
         result.className = 'ampel-result';
@@ -106,9 +109,9 @@ export function morningCheck(refDate) {
       result.hidden = !complete;
       if (complete) {
         const v = morningVerdict(answer);
-        const color = v === 'ok' ? 'gruen' : v === 'halten' ? 'gelb' : v;
+        const color = morningColor(answer);
         result.className = `ampel-result r-${color}`;
-        result.append(statusBadge(color, v === 'halten' ? 'Halten' : AMPEL[color].label), h('p', null, MORNING_TEXT[v]));
+        result.append(statusBadge(color), h('p', null, MORNING_TEXT[v]));
       }
     }
 
@@ -117,7 +120,7 @@ export function morningCheck(refDate) {
       body: [
         h('p', { class: 'sheet-sub' }, `Bezogen auf das Beintraining am ${fmtDateShort(refDate)}`),
         h('h3', { class: 'sheet-label' }, 'Knie heute schlimmer als gestern?'), q1,
-        h('h3', { class: 'sheet-label' }, 'Schwellung?'), q2,
+        h('h3', { class: 'sheet-label' }, 'Mehr Schwellung als gestern?'), q2,
         h('h3', { class: 'sheet-label' }, 'Stroke-Test, falls gemacht'), q3,
         result,
       ],
@@ -145,10 +148,8 @@ export function infoSheet() {
       h('h3', { class: 'sheet-label' }, 'Tabu bis zur zweiten OP'),
       h('ul', { class: 'tabu-list' }, store.tabu().map((t) => h('li', null, t))),
       h('h3', { class: 'sheet-label' }, 'Knie-Ampel'),
-      h('div', { class: 'ampel-table' },
-        ampelRow('gruen', 'Schmerz 0 bis 3, am nächsten Morgen nicht schlimmer'),
-        ampelRow('gelb', 'Schmerz 4 bis 5 oder am nächsten Tag mehr Schwellung'),
-        ampelRow('rot', 'Schmerz 6 bis 10, stechender Schmerz, Wegknicken, Blockieren oder deutliche Schwellung')),
+      h('div', { class: 'ampel-table' }, ampelRow('gruen'), ampelRow('gelb'), ampelRow('rot')),
+      h('p', { class: 'sheet-text muted' }, 'Schmerz und Schwellung dürfen von Woche zu Woche nicht zunehmen.'),
       h('h3', { class: 'sheet-label' }, 'Zone 2'),
       h('p', { class: 'sheet-text' }, ZONE2_HINT),
       h('h3', { class: 'sheet-label' }, `${phase.name}: ${phase.title}`),
@@ -157,10 +158,10 @@ export function infoSheet() {
   });
 }
 
-function ampelRow(color, sign) {
+function ampelRow(color) {
   return h('div', { class: 'ampel-row' },
     statusBadge(color),
-    h('div', null, h('div', null, sign), h('div', { class: 'muted' }, AMPEL[color].rule)));
+    h('div', null, h('div', null, AMPEL[color].sign), h('div', { class: 'muted' }, AMPEL[color].rule)));
 }
 
 /** Hinweistext beim Phasenwechsel. */

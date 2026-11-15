@@ -129,7 +129,9 @@ Wenn sich am Code etwas ändert:
 
 Ohne neue Versionsnummer behält das iPhone die alten Dateien. Das ist Absicht, damit die App im Gym ohne Netz zuverlässig startet.
 
-Die Trainingsdaten bleiben bei Updates erhalten. Änderungen an den Startdaten (`js/seed.js`) wirken nur bei einer frischen Installation oder über **Mehr** → **Plan auf Startdaten zurücksetzen**. Dabei gehen eigene Planänderungen verloren, der Verlauf bleibt.
+Die Trainingsdaten bleiben bei Updates erhalten.
+
+Ändert sich der Startplan in `js/seed.js`, dort zusätzlich `SEED_VERSION` erhöhen. Die installierte App zeigt dann auf **Heute** den Hinweis **Überarbeiteter Trainingsplan** (und unter **Mehr** einen Knopf dafür). Beim Übernehmen werden Startübungen, Starteinheiten und Wochenpläne ersetzt. Erhalten bleiben eigene Übungen und Einheiten, Pausierungen, freigeschaltete Phasen und der Verlauf. Eigene Änderungen an den Startübungen gehen dabei verloren.
 
 ## Was iOS erlaubt und was nicht
 
@@ -170,9 +172,11 @@ tests/logic.test.mjs   Tests für Regeln und Startdaten
 
 Alle Trainingsregeln stehen in `js/logic.js` und sind getestet:
 
-- **Knie-Ampel:** Schmerz 0 bis 3 grün, 4 bis 5 gelb, ab 6 oder bei Warnzeichen rot. Rot pausiert die Übung, bis sie im Plan oder im Training freigegeben wird.
-- **Kniecheck am Folgetag:** „Schlimmer“ oder „Schwellung“ stuft Grün vom Vortag auf Gelb ab. Optional mit Stroke-Test: 1+ heißt halten, ab 2+ zurücknehmen.
-- **Steigerungshinweis:** zweimal hintereinander alle Sätze am unteren Zielwert geschafft und die Ampel grün.
+- **Knie-Ampel** (konservativ fürs instabile Knie, aus der Prehab-Recherche): Schmerz 0 bis 2 grün (steigern), 3 bis 4 gelb (Last halten), ab 5 oder bei Warnzeichen rot. Rot pausiert die Übung. Nach reinem Schmerz lässt sie sich beim nächsten Training mit 10 Prozent weniger Gewicht freigeben oder tauschen. Nach Warnzeichen (Wegknicken, Blockieren, stechender Schmerz, deutliche Schwellung) erst nach ärztlicher Abklärung.
+- **Kniecheck am Folgetag:** mehr Schmerz oder mehr Schwellung als am Vortag ist Rot und stuft die Übungen vom Vortag ab. Optional mit Stroke-Test: 1+ heißt halten, ab 2+ zurücknehmen.
+- **Steigerungshinweis:** zweimal hintereinander alle Sätze am unteren Zielwert geschafft und die Ampel grün. Steigerung um 5 bis 10 Prozent.
+- **Tägliche Einheit:** Streckung, Quadrizeps anspannen und gerades Beinheben jeden Tag, unabhängig vom Wochenplan. Ohne Knie-Ampel, damit nicht jeder Tag einen Kniecheck auslöst.
+- **Bereit zur OP:** Unter **Verlauf** → **Knie** zeigt eine Checkliste die Kriterien aus Delaware-Oslo und Leitlinie (volle Streckung, Beugung ab 120°, kein Erguss, Beinheben ohne Streckdefizit, normales Gangbild, Quadrizeps ab 80 Prozent der Gegenseite, Einbeinstand über 30 s). Die Werte kommen aus den Messungen vom Physio.
 - **Vorbelegung:** Werte vom letzten Mal. Bei Beinübungen kommt das Gewicht nur aus derselben Phase, damit nach einer OP nicht das Gewicht von vorher vorgeschlagen wird.
 - **Klausurmodus:** nur Montag, Dienstag und Freitag.
 

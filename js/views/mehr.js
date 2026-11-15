@@ -8,6 +8,7 @@ import { exportBackup, importBackup } from '../backup.js';
 import { phaseHintSheet } from '../ui/sheets.js';
 import { isStandalone, wakeLockSupported } from '../ui/device.js';
 import { APP_VERSION } from '../version.js';
+import { offerSeedUpdate } from './heute.js';
 
 export function render(ctx) {
   ctx.top({ title: 'Mehr' });
@@ -171,6 +172,9 @@ function dataSection(ctx) {
   return h('section', { class: 'card' },
     h('h2', null, 'Daten'),
     h('div', { class: 'stack' },
+      store.seedUpdateAvailable()
+        ? h('button', { class: 'btn primary block', onclick: () => offerSeedUpdate(ctx) }, 'Überarbeiteten Plan übernehmen')
+        : null,
       h('button', { class: 'btn secondary block', onclick: async () => {
         const ok = await confirmDialog('Alle Übungen, Einheiten und Wochenpläne werden auf den Startplan zurückgesetzt. Eigene Übungen, Änderungen und Pausierungen gehen verloren. Der Verlauf bleibt.', { title: 'Plan zurücksetzen', ok: 'Zurücksetzen', danger: true });
         if (!ok) return;

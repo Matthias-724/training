@@ -1,6 +1,7 @@
 // Heute-Ansicht: was laut Wochenplan heute dran ist, offene Hinweise und die Woche.
 
-import { h, icon, choose } from '../ui/dom.js';
+import { h, icon, choose, confirmDialog, toast } from '../ui/dom.js';
+import { SEED_VERSION } from '../seed.js';
 import {
   dateKey, weekdayOf, weekStart, addDays, resolveDay, dayTitle, cardioSummary, formatTarget,
   progressionHint, pendingMorningCheck, backupStatus, phaseIsEmpty, trainingKnee, worseColor,
@@ -38,6 +39,8 @@ export function render(ctx) {
   } else {
     ctx.main.append(dayCard(ctx, day, unit, today));
   }
+  const daily = dailyCard(ctx, phase, today);
+  if (daily) ctx.main.append(daily);
 
   ctx.main.append(
     h('div', { class: 'quick-actions' },
@@ -64,6 +67,16 @@ function banners(ctx, today) {
       h('button', { class: 'btn primary small', onclick: async () => { if (await morningCheck(refDate)) ctx.refresh(); } }, 'Beantworten')));
   }
 
+  if (store.seedUpdateAvailable() && store.meta('seedUpdateLater') !== SEED_VERSION) {
+    out.push(h('div', { class: 'banner accent' },
+      h('div', null,
+        h('strong', null, 'Überarbeiteter Trainingsplan'),
+        h('div', null, 'Nach der Prehab-Studienlage: tägliche Streckung, neue Beintage, strengere Knie-Ampel.')),
+      h('div', { class: 'banner-actions' },
+        h('button', { class: 'btn primary small', onclick: () => offerSeedUpdate(ctx) }, 'Ansehen'),
+        h('button', { class: 'btn secondary small', onclick: () => { store.setMeta('seedUpdateLater', SEED_VERSION); ctx.refresh(); } }, 'Später'))));
+  }
+
   const backup = backupStatus(store.meta('lastBackupAt'), store.meta('installedAt'), Date.now());
   if (backup.due) {
     out.push(h('div', { class: 'banner warn' },
@@ -83,6 +96,40 @@ function banners(ctx, today) {
   return out;
 }
 
+/** Erklärt das Plan-Update und übernimmt es auf Wunsch. Auch von "Mehr" aus genutzt. */
+export async function offerSeedUpdate(ctx) {
+  const ok = await confirmDialog(
+    'Neu: jeden Tag Streckung und Quadrizeps-Aktivierung als eigene Einheit. Beintage Dienstag und Freitag mit Störungstraining am Anfang, eigenen schweren Sätzen fürs gesunde Bein, 4 Sätzen Beinpresse und Kniestrecker und Hüftaußenrotation. Donnerstag nur noch Rad, Core und Mobilität. Startübungen, Starteinheiten und Wochenpläne werden ersetzt, eigene Änderungen daran gehen verloren. Eigene Übungen, Pausierungen, freigeschaltete Phasen und der Verlauf bleiben.',
+    { title: 'Neuen Plan übernehmen', ok: 'Übernehmen' });
+  if (!ok) return;
+  await store.applySeedUpdate();
+  toast('Neuer Plan übernommen');
+  ctx.refresh();
+}
+
+/** Tägliche Einheit der Phase, unabhängig vom Wochentag und vom Klausurmodus. */
+function dailyCard(ctx, phase, today) {
+  const u = store.dailyUnit(phase);
+  if (!u) return null;
+  const done = store.trainingsOn(today).filter((t) => t.unitId === u.id);
+  return h('section', { class: 'card day-card' },
+    h('div', { class: 'day-card-head' },
+      h('h2', null, u.name),
+      done.length ? h('span', { class: 'badge good' }, `erledigt ${fmtTime(done[0].finishedAt ?? done[0].startedAt)}`) : null),
+    u.hint ? h('p', { class: 'muted small' }, u.hint) : null,
+    h('ol', { class: 'ex-list' }, u.exerciseIds.map(exerciseLine)),
+    h('button', {
+      class: `btn ${done.length ? 'secondary' : 'primary'} block`,
+      onclick: () => startTraining(ctx, { unitId: u.id, title: u.name }),
+    }, icon('play'), done.length ? 'Noch einmal starten' : 'Starten'));
+}
+
+/** Trainings eines Tages ohne die tägliche Einheit, damit sie nicht als Tagestraining zählt. */
+function mainTrainingsOn(date) {
+  const dailyId = store.activePhase().dailyUnitId;
+  return store.trainingsOn(date).filter((t) => !dailyId || t.unitId !== dailyId);
+}
+
 // ---------------------------------------------------------------- Heutige Einheit
 
 function exerciseLine(id) {
@@ -100,7 +147,7 @@ function exerciseLine(id) {
 export function dayCard(ctx, day, unit, dateForDone) {
   const card = h('section', { class: 'card day-card' });
   const title = dayTitle(day, unit?.name);
-  const doneToday = dateForDone ? store.trainingsOn(dateForDone) : [];
+  const doneToday = dateForDone ? mainTrainingsOn(dateForDone) : [];
 
   card.append(h('div', { class: 'day-card-head' },
     h('h2', null, title),
@@ -151,7 +198,7 @@ function weekCard(ctx, phase, examMode, today) {
     const date = addDays(start, i);
     const day = resolveDay(phase, wd, examMode);
     const unit = day.unitId ? store.unit(day.unitId) : null;
-    const done = store.trainingsOn(date);
+    const done = mainTrainingsOn(date);
     // Farbe inklusive Kniecheck vom Folgetag, damit Woche und Verlauf dasselbe zeigen.
     const worst = done.map((t) => trainingKnee(t, store.checkFor(t.date))?.color ?? null).reduce(worseColor, null);
     return h('button', {

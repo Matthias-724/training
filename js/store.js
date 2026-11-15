@@ -6,7 +6,7 @@
 // geschrieben. Schreibfehler landen beim Fehler-Handler der App.
 
 import * as db from './db.js';
-import { buildSeed, SEED_VERSION, DEFAULT_TABU, CATEGORIES } from './seed.js';
+import { buildSeed, mergeSeedUpdate, SEED_VERSION, DEFAULT_TABU, TABU_V1, CATEGORIES } from './seed.js';
 
 const state = {
   exercises: new Map(),
@@ -117,7 +117,7 @@ export function newExercise(partial = {}) {
   return {
     id: uid('ex'), name: '', category: 'oberkoerper', sets: 3, mode: 'reps', min: 10, max: 12,
     perSide: false, weighted: true, assisted: false, restSec: 90, hint: '', kneeCheck: false,
-    paused: false, pausedSince: null, alternatives: [], ...partial,
+    paused: false, pausedSince: null, pausedReason: null, alternatives: [], ...partial,
   };
 }
 
@@ -159,11 +159,17 @@ export function alternativeOf(exerciseId) {
   return [...state.exercises.values()].filter((e) => e.alternatives.includes(exerciseId));
 }
 
-export function pauseExercise(id, dateKey) {
+/**
+ * Pausiert eine Übung nach roter Ampel. Ist sie schon pausiert, wird nur ein
+ * schwerer wiegender Grund nachgetragen (Warnzeichen vor Schmerz).
+ */
+export function pauseExercise(id, dateKey, reason = 'schmerz') {
   const ex = exercise(id);
-  if (!ex || ex.paused) return Promise.resolve(true);
+  if (!ex) return Promise.resolve(true);
+  if (ex.paused && (ex.pausedReason === 'warnzeichen' || reason !== 'warnzeichen')) return Promise.resolve(true);
   ex.paused = true;
-  ex.pausedSince = dateKey;
+  ex.pausedSince = ex.pausedSince ?? dateKey;
+  ex.pausedReason = reason;
   return saveExercise(ex);
 }
 
@@ -172,6 +178,7 @@ export function releaseExercise(id) {
   if (!ex) return Promise.resolve(true);
   ex.paused = false;
   ex.pausedSince = null;
+  ex.pausedReason = null;
   return saveExercise(ex);
 }
 
@@ -194,7 +201,7 @@ export function saveUnit(u) {
   return persist(db.put('units', u));
 }
 
-/** Löscht die Einheit und trägt sie aus allen Wochenplänen aus. */
+/** Löscht die Einheit und trägt sie aus allen Wochenplänen und als tägliche Einheit aus. */
 export function deleteUnit(id) {
   state.units.delete(id);
   const changed = [];
@@ -206,20 +213,31 @@ export function deleteUnit(id) {
         touched = true;
       }
     }
+    if (p.dailyUnitId === id) {
+      p.dailyUnitId = null;
+      touched = true;
+    }
     if (touched) changed.push(p);
   }
   return persist(Promise.all([db.remove('units', id), db.putMany('phases', changed)]));
 }
 
-/** Phasen und Wochentage, an denen eine Einheit eingeplant ist. */
+/** Phasen und Wochentage, an denen eine Einheit eingeplant ist. weekday 'taeglich' = tägliche Einheit. */
 export function unitUsage(id) {
   const out = [];
   for (const p of allPhases()) {
+    if (p.dailyUnitId === id) out.push({ phase: p, weekday: 'taeglich' });
     for (const [wd, d] of Object.entries(p.weekplan)) {
       if (d.unitId === id) out.push({ phase: p, weekday: wd });
     }
   }
   return out;
+}
+
+/** Tägliche Einheit der Phase, falls es sie gibt und sie Übungen hat. */
+export function dailyUnit(p = activePhase()) {
+  const u = p?.dailyUnitId ? unit(p.dailyUnitId) : null;
+  return u && u.exerciseIds.length ? u : null;
 }
 
 /** Ersetzt eine Übung dauerhaft in einer Einheit und merkt sich die alte als Ersatz. */
@@ -453,16 +471,40 @@ export async function importData(obj) {
   await init();
 }
 
-/** Setzt Übungen, Einheiten und Phasen auf die Startdaten zurück. Der Verlauf bleibt. */
-export async function resetPlan() {
-  const seed = buildSeed();
+async function replacePlan(plan) {
   const activeId = meta('activePhaseId');
-  await db.replaceStores({ exercises: seed.exercises, units: seed.units, phases: seed.phases });
-  state.exercises = new Map(seed.exercises.map((x) => [x.id, x]));
-  state.units = new Map(seed.units.map((x) => [x.id, x]));
-  state.phases = new Map(seed.phases.map((x) => [x.id, x]));
+  await db.replaceStores({ exercises: plan.exercises, units: plan.units, phases: plan.phases });
+  state.exercises = new Map(plan.exercises.map((x) => [x.id, x]));
+  state.units = new Map(plan.units.map((x) => [x.id, x]));
+  state.phases = new Map(plan.phases.map((x) => [x.id, x]));
   const active = phase(activeId);
   if (!active || active.locked) await setMeta('activePhaseId', 'p1');
+  await setMeta('seedVersion', SEED_VERSION);
+}
+
+/** Setzt Übungen, Einheiten und Phasen komplett auf die Startdaten zurück. Der Verlauf bleibt. */
+export function resetPlan() {
+  return replacePlan(buildSeed());
+}
+
+/** true, wenn die App neuere Startdaten mitbringt, als im Plan stehen. */
+export function seedUpdateAvailable() {
+  return (meta('seedVersion') ?? 1) < SEED_VERSION;
+}
+
+/**
+ * Übernimmt den überarbeiteten Startplan. Eigene Übungen und Einheiten,
+ * Pausierungen und freigeschaltete Phasen bleiben (siehe mergeSeedUpdate).
+ * Eine unveränderte Tabu-Liste wird auf die neue Fassung gebracht.
+ */
+export async function applySeedUpdate() {
+  const current = {
+    exercises: [...state.exercises.values()],
+    units: [...state.units.values()],
+    phases: [...state.phases.values()],
+  };
+  await replacePlan(mergeSeedUpdate(current));
+  if (JSON.stringify(meta('tabu')) === JSON.stringify(TABU_V1)) await setMeta('tabu', [...DEFAULT_TABU]);
 }
 
 export async function wipeAll() {

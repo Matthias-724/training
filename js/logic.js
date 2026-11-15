@@ -78,10 +78,13 @@ export function formatNum(n) {
 
 export const COLORS = ['gruen', 'gelb', 'rot'];
 
+// Grenzen nach dem konservativen Modell für ein instabiles Knie aus der
+// Prehab-Recherche (abgeleitet von Silbernagel 2007, dort bis 5/10 für Sehnen).
+// Für Gelenke mit möglichem Meniskus- oder Knorpelschaden gilt: früher bremsen.
 export const AMPEL = {
-  gruen: { label: 'Grün', rule: 'Weitermachen, langsam steigern' },
-  gelb: { label: 'Gelb', rule: 'Gewicht oder Bewegungsumfang zurücknehmen' },
-  rot: { label: 'Rot', rule: 'Übung streichen und beim Arzt abklären' },
+  gruen: { label: 'Grün', sign: 'Schmerz 0 bis 2, am nächsten Morgen nicht schlimmer', rule: 'Weiter, progressiv steigern' },
+  gelb: { label: 'Gelb', sign: 'Schmerz 3 bis 4, klingt bis zum nächsten Morgen ab', rule: 'Last halten, nicht steigern' },
+  rot: { label: 'Rot', sign: 'Schmerz ab 5, am Folgetag mehr Schmerz oder Schwellung, Wegknicken, Blockieren, stechender Schmerz', rule: 'Last reduzieren oder Übung ersetzen. Bei Blockade oder Wegknicken ärztlich abklären' },
 };
 
 export const KNEE_FLAGS = {
@@ -92,17 +95,28 @@ export const KNEE_FLAGS = {
 };
 
 /**
- * Ampelfarbe direkt nach einer Übung.
- * Warnzeichen schlagen jeden Schmerzwert. Über 5 gilt nach dem
- * Schmerz-Monitoring-Modell (Thomeé 1997) als hohes Risiko, deshalb Rot,
- * auch wenn der ursprüngliche Plan diesen Bereich offen ließ.
+ * Ampelfarbe direkt nach einer Übung. Warnzeichen schlagen jeden Schmerzwert.
  */
 export function ampelColor(pain, flags = {}) {
   if (Object.values(flags).some(Boolean)) return 'rot';
   if (pain == null) return null;
-  if (pain >= 6) return 'rot';
-  if (pain >= 4) return 'gelb';
+  if (pain >= 5) return 'rot';
+  if (pain >= 3) return 'gelb';
   return 'gruen';
+}
+
+/**
+ * Grund einer Pausierung. Warnzeichen brauchen eine ärztliche Abklärung,
+ * reiner Schmerz nur weniger Last oder eine Ersatzübung.
+ */
+export function pauseReason(knee) {
+  return Object.values(knee?.flags ?? {}).some(Boolean) ? 'warnzeichen' : 'schmerz';
+}
+
+/** Gewicht nach Rot um 10 Prozent senken, auf halbe Kilo gerundet. */
+export function reducedWeight(weight) {
+  if (weight == null) return null;
+  return Math.round(weight * 0.9 * 2) / 2;
 }
 
 /** Die schlechtere von zwei Farben. null zählt als "keine Angabe". */
@@ -117,37 +131,42 @@ export function worseColor(a, b) {
 export const STROKE_GRADES = ['0', 'Spur', '1+', '2+', '3+'];
 
 export const MORNING_TEXT = {
-  ok: 'Keine Verschlechterung. Weitermachen wie geplant.',
-  halten: 'Leichte Schwellung (1+). Nicht steigern, Belastung halten.',
-  gelb: 'Mehr Schwellung oder schlimmer: Gewicht oder Bewegungsumfang zurücknehmen.',
-  rot: 'Deutliche Schwellung (3+). Belastung stark reduzieren und beim Arzt abklären.',
+  ok: 'Nicht schlimmer und keine zusätzliche Schwellung. Weiter wie geplant.',
+  gelb: 'Leichte Schwellung (Stroke-Test 1+): Last halten, nicht steigern.',
+  rot: 'Schlechter als gestern: Last reduzieren oder Übungen ersetzen. Bei Blockade, Wegknicken oder deutlicher Schwellung ärztlich abklären.',
 };
 
 /**
- * Bewertung des Kniechecks am Morgen nach einem Beintraining.
- * Die Stufen folgen den Delaware-Regeln: 0 oder Spur weiter, 1+ halten,
- * ab 2+ zurücknehmen. "Schlimmer" oder "Schwellung" ohne Messung zählt wie 2+.
+ * Bewertung des Kniechecks am Morgen nach einem Beintraining: 'ok', 'gelb' oder 'rot'.
+ * Mehr Schmerz oder mehr Schwellung als am Vortag ist laut Ampel Rot.
+ * Der Stroke-Test folgt den Delaware-Regeln: 0 oder Spur weiter, 1+ halten,
+ * ab 2+ zurücknehmen.
  */
 export function morningVerdict(check) {
   if (!check) return null;
   const grade = STROKE_GRADES.indexOf(check.stroke ?? '');
-  if (grade >= 4) return 'rot';
-  if (check.schlimmer || check.schwellung || grade === 3) return 'gelb';
-  if (grade === 2) return 'halten';
+  if (check.schlimmer || check.schwellung || grade >= 3) return 'rot';
+  if (grade === 2) return 'gelb';
   return 'ok';
+}
+
+/** Ampelfarbe zum Morgen-Befund, für die Anzeige. */
+export function morningColor(check) {
+  const v = morningVerdict(check);
+  return v === 'ok' ? 'gruen' : v;
 }
 
 /**
  * Farbe einer Übung unter Berücksichtigung des Folgetags.
- * Laut Plan wird Grün zu Gelb, wenn das Knie am nächsten Morgen schlimmer ist.
  * Einen Morgen-Befund kann die App keiner einzelnen Übung zuordnen, deshalb
  * pausiert er nichts automatisch, sondern stuft alle Übungen des Vortags ab.
+ * Die Warnung erscheint beim nächsten Mal an jeder dieser Übungen.
  */
 export function effectiveColor(entry, check) {
   const color = entry?.knee?.color ?? null;
   if (!color) return null;
   const verdict = morningVerdict(check);
-  if (verdict === 'gelb' || verdict === 'rot') return worseColor(color, 'gelb');
+  if (verdict === 'gelb' || verdict === 'rot') return worseColor(color, verdict);
   return color;
 }
 
@@ -195,10 +214,7 @@ export function progressionHint(history) {
   if (recent.length < 2) return null;
   for (const { entry, check } of recent) {
     if (!entryAchieved(entry)) return null;
-    if (entry.kneeCheck) {
-      if (effectiveColor(entry, check) !== 'gruen') return null;
-      if (morningVerdict(check) === 'halten') return null;
-    }
+    if (entry.kneeCheck && effectiveColor(entry, check) !== 'gruen') return null;
   }
   const latest = recent[0].entry;
   if (latest.mode === 'hold') {
@@ -207,7 +223,7 @@ export function progressionHint(history) {
   if (latest.weighted && entryAtTop(latest)) {
     return latest.assisted
       ? { text: 'Steigern: Wiederholungen sind oben angekommen, jetzt die Unterstützung leicht verringern' }
-      : { text: 'Steigern: Wiederholungen sind oben angekommen, jetzt das Gewicht leicht erhöhen' };
+      : { text: 'Steigern: Wiederholungen sind oben angekommen, jetzt das Gewicht um 5 bis 10 Prozent erhöhen' };
   }
   return { text: latest.assisted
     ? 'Steigern, erst Wiederholungen, dann weniger Unterstützung'
@@ -219,7 +235,8 @@ export function lastKneeWarning(history) {
   const last = history.find((h) => !h.entry.skipped);
   if (!last || !last.entry.kneeCheck) return null;
   const color = effectiveColor(last.entry, last.check);
-  return color === 'gelb' ? { color, text: `Letztes Mal Gelb: ${AMPEL.gelb.rule}` } : null;
+  if (color === 'gelb' || color === 'rot') return { color, text: `Letztes Mal ${AMPEL[color].label}: ${AMPEL[color].rule}` };
+  return null;
 }
 
 /**
@@ -243,10 +260,15 @@ export function prefillSets(exercise, repsSource, weightSource) {
   return sets;
 }
 
-/** "3 × 10–12", "4 × 30–45 s", "3 × 10 je Seite" */
+/** "3 × 10–12", "4 × 30–45 s", "2 × 5–10 min", "3 × 10 je Seite" */
 export function formatTarget(ex) {
-  const range = ex.max != null && ex.max !== ex.min ? `${ex.min}–${ex.max}` : `${ex.min}`;
-  const unit = ex.mode === 'hold' ? ' s' : '';
+  // Ab zwei Minuten liest sich "5–10 min" besser als "300–600 s".
+  const inMinutes = ex.mode === 'hold' && ex.min >= 120 && ex.min % 60 === 0 && (ex.max ?? ex.min) % 60 === 0;
+  const scale = inMinutes ? 60 : 1;
+  const lo = ex.min / scale;
+  const hi = (ex.max ?? ex.min) / scale;
+  const range = hi !== lo ? `${lo}–${hi}` : `${lo}`;
+  const unit = ex.mode === 'hold' ? (inMinutes ? ' min' : ' s') : '';
   return `${ex.sets} × ${range}${unit}${ex.perSide ? ' je Seite' : ''}`;
 }
 
@@ -303,6 +325,36 @@ export function phaseIsEmpty(phase) {
 // ---------------------------------------------------------------- Backup
 
 export const BACKUP_MAX_DAYS = 14;
+
+// ---------------------------------------------------------------- Bereit zur OP
+
+/**
+ * Kriterien vor einer OP, abgeleitet aus Delaware-Oslo und der JOSPT-Leitlinie.
+ * test liefert true (erfüllt), false (offen) oder null (nicht gemessen).
+ */
+const READINESS = [
+  { key: 'streckung', label: 'Volle Streckung', field: 'streckdefizit', test: (v) => v <= 0, show: (v) => `${formatNum(v)}° Defizit` },
+  { key: 'beugung', label: 'Beugung mindestens 120°', field: 'beugung', test: (v) => v >= 120, show: (v) => `${formatNum(v)}°` },
+  { key: 'erguss', label: 'Kein oder minimaler Erguss', field: 'stroke', test: (v) => v === '0' || v === 'Spur', show: (v) => `Stroke-Test ${v}` },
+  { key: 'slr', label: 'Beinheben ohne Streckdefizit', field: 'slrOk', test: (v) => v === true, show: (v) => (v ? 'ja' : 'nein') },
+  { key: 'gang', label: 'Normales Gangbild', field: 'gangOk', test: (v) => v === true, show: (v) => (v ? 'ja' : 'nein') },
+  { key: 'lsi', label: 'Quadrizeps mindestens 80 % der Gegenseite', field: 'lsi', test: (v) => v >= 80, show: (v) => `${formatNum(v)} %` },
+  { key: 'stand', label: 'Einbeinstand über 30 s', field: 'standOk', test: (v) => v === true, show: (v) => (v ? 'ja' : 'nein') },
+];
+
+/**
+ * Stand der OP-Kriterien. Pro Kriterium zählt die neueste Messung, die dafür
+ * einen Wert hat, weil der Physio nicht jedes Mal alles misst.
+ * @param measurements neueste zuerst
+ */
+export function opReadiness(measurements) {
+  return READINESS.map((c) => {
+    const m = measurements.find((x) => x[c.field] != null && x[c.field] !== '');
+    if (!m) return { key: c.key, label: c.label, ok: null, value: null, date: null };
+    const v = m[c.field];
+    return { key: c.key, label: c.label, ok: c.test(v), value: c.show(v), date: m.date };
+  });
+}
 
 /**
  * Erinnerung, wenn das letzte Backup älter als 14 Tage ist. Ohne Backup zählt

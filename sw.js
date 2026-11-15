@@ -9,7 +9,7 @@
 // Auf localhost gilt Netzwerk zuerst, damit Änderungen beim Entwickeln sofort
 // sichtbar sind. Offline greift auch dort der Cache.
 
-const VERSION = '1.0.0'; // zusammen mit js/version.js erhöhen
+const VERSION = '1.1.0'; // zusammen mit js/version.js erhöhen
 const CACHE = `trainings-app-${VERSION}`;
 const DEV = ['localhost', '127.0.0.1'].includes(self.location.hostname);
 
