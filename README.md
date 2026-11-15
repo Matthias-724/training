@@ -1,5 +1,7 @@
 # Trainings-App
 
+**Adresse:** https://matthias-724.github.io/training/
+
 Prehab-Trainingsplan als Web-App fürs iPhone. Sie läuft in Safari, wird auf den Home-Bildschirm gelegt und funktioniert danach offline. Alle Trainingsdaten bleiben auf dem iPhone. Es gibt keinen Server, der Daten speichert, und kein Login.
 
 > **Wichtig:** Der Trainingsplan ist ein Vorschlag und nicht ärztlich freigegeben. Vor dem Start mit Arzt oder Physio durchgehen.
@@ -114,7 +116,15 @@ Wenn sich am Code etwas ändert:
 
 1. In `sw.js` die Zeile `const VERSION = '1.0.0';` erhöhen, z.B. auf `'1.0.1'`.
 2. In `js/version.js` dieselbe Nummer eintragen.
-3. Die geänderten Dateien hochladen. Bei GitHub die Dateien einfach erneut hochziehen, gleichnamige werden ersetzt.
+3. Hochladen. Der Ordner ist bereits mit dem Repository `Matthias-724/training` verbunden, im Ordner `Trainings-App` reicht:
+
+   ```bash
+   git add -A
+   git commit -m "Kurz beschreiben, was sich geändert hat"
+   git push
+   ```
+
+   Ohne Git geht es auch im Browser: Auf GitHub die geänderten Dateien erneut hochziehen, gleichnamige werden ersetzt. GitHub Pages veröffentlicht nach ein bis zwei Minuten.
 4. Auf dem iPhone die App öffnen, solange Internet da ist. Unten erscheint **Neue Version verfügbar**. Auf **Aktualisieren** tippen.
 
 Ohne neue Versionsnummer behält das iPhone die alten Dateien. Das ist Absicht, damit die App im Gym ohne Netz zuverlässig startet.
