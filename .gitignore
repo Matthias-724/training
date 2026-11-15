@@ -1,0 +1,5 @@
+# Persönliche Angaben, gehören nicht ins öffentliche Repository
+AUFTRAG.md
+
+node_modules/
+*.log
